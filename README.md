@@ -16,30 +16,21 @@
 ```shell
 # 以下文件夹及内容copy自paddlerec/models，相关修改后续合入PaddleRec  
 ├── ctr_dnn        
-├── word2vec       
-├── deepfm
-├── wide_deep
 ```
 
 
 # 运行方法
 
-- 安装 paddlepaddle develop版本
+- 安装 paddlepaddle 1.8.5版本
 
 - 运行命令
 
     在ctr_dnn目录下
 
-    单机运行ctr
-
-    ```shell
-    python -u ../train.py -c benchmark.yaml
-    ```
-
     模拟分布式运行ctr
 
     ```shell
-    fleetrun --worker_num=2 --server_num=2 ../train.py -c benchmark.yaml
+    sh local_cluster.sh
     ```
 
     运行infer
@@ -54,14 +45,14 @@
 
 需注意运行python时的目录，与模型组网、reade所在目录的相对关系，配置workspace
 
-若在`static`目录下运行，应当将模型的`benchmark.yaml`里的`workspace`调整为模型目录，如word2vec模型，调整为
+若在根目录下运行，应当将模型的`benchmark.yaml`里的`workspace`调整为模型目录，如ctr模型，调整为
 
 ```yaml
-workspace: word2vec
+workspace: ctr_dnn
 ```
 
 若在模型目录下运行，将`workspace`调整为`./`
 
 ## 执行分布式训练
 
-在每台机器上都使用fleetrun命令，[fleetrun](https://github.com/PaddlePaddle/FleetX/blob/develop/docs/source/paddle_fleet_rst/fleetrun_usage_cn.rst)
+在每台机器上设置环境变量后，执行 `python -u train.py`

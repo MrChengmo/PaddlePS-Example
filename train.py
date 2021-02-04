@@ -18,13 +18,14 @@ import warnings
 import logging
 import paddle
 import paddle.fluid as fluid
-import paddle.distributed.fleet.base.role_maker as role_maker
-import paddle.distributed.fleet as fleet
 import utils
 import time
 import reader
 import program
 import argparse
+import paddle.fluid.incubate.fleet.base.role_maker as role_maker
+from paddle.fluid.incubate.fleet.parameter_server.distribute_transpiler import fleet
+from paddle.fluid.transpiler.distribute_transpiler import DistributeTranspilerConfig
 
 
 logging.basicConfig(
@@ -57,7 +58,8 @@ class Main(object):
         self.exe = None
 
     def run(self):
-        fleet.init()
+        role = role_maker.PaddleCloudRoleMaker()
+        fleet.init(role)
         self.network()
         if fleet.is_server():
             self.run_server()
@@ -82,18 +84,17 @@ class Main(object):
 
     def run_worker(self):
         logger.info("Run Worker Begin")
-        use_cuda = int(config.get(
-            "static_benchmark.use_cuda"))
-        place = paddle.CUDAPlace(0) if use_cuda else paddle.CPUPlace()
-        self.exe = paddle.static.Executor(place)
+        place = fluid.CPUPlace()
+        self.exe = fluid.Executor(place)
 
         with open("./{}_worker_main_program.prototxt".format(fleet.worker_index()), 'w+') as f:
-            f.write(str(paddle.static.default_main_program()))
+            f.write(str(fluid.default_main_program()))
         with open("./{}_worker_startup_program.prototxt".format(fleet.worker_index()), 'w+') as f:
-            f.write(str(paddle.static.default_startup_program()))
+            f.write(str(fluid.default_startup_program()))
 
-        self.exe.run(paddle.static.default_startup_program())
         fleet.init_worker()
+        self.exe.run(fluid.default_startup_program())
+        
 
         save_model_path = self.config.get("static_benchmark.save_model_path")
         if save_model_path and not os.path.exists(save_model_path):
@@ -106,12 +107,10 @@ class Main(object):
         for epoch in range(epochs):
             epoch_start_time = time.time()
 
-            if sync_mode == "heter":
-                self.heter_train_loop(epoch)
-            elif reader_type == "QueueDataset":
+            if reader_type == "QueueDataset":
                 self.dataset_train_loop(epoch)
             elif reader_type == "DataLoader":
-                self.dataloader_train_loop(epoch)
+                pass
 
             epoch_time = time.time() - epoch_start_time
             epoch_speed = self.example_nums / epoch_time
@@ -147,98 +146,15 @@ class Main(object):
         fetch_vars = [var for _, var in self.metrics.items()]
         print_step = int(config.get("static_benchmark.print_period"))
         self.exe.train_from_dataset(
-            program=paddle.static.default_main_program(),
+            program=fluid.default_main_program(),
             dataset=self.reader,
             fetch_list=fetch_vars,
             fetch_info=fetch_info,
             print_period=print_step,
             debug=config.get("static_benchmark.dataset_debug"))
 
-    def dataloader_train_loop(self, epoch):
-        logger.info("Epoch: {}, Running Begin.".format(epoch))
-        batch_id = 0
-        train_run_cost = 0.0
-        total_examples = 0
-        self.reader.start()
-        while True:
-            try:
-                train_start = time.time()
-                # --------------------------------------------------- #
-                fetch_var = self.exe.run(
-                    program=paddle.static.default_main_program(),
-                    fetch_list=[var for _, var in self.metrics.items()])
-                # --------------------------------------------------- #
-                train_run_cost += time.time() - train_start
-                total_examples += self.config.get(
-                    "static_benchmark.batch_size")
-                batch_id += 1
-                print_step = int(config.get("static_benchmark.print_period"))
-                if batch_id % print_step == 0:
-                    metrics_string = ""
-                    for var_idx, var_name in enumerate(self.metrics):
-                        metrics_string += "{}: {}, ".format(var_name,
-                                                            fetch_var[var_idx])
-                    profiler_string = ""
-                    profiler_string += "avg_batch_cost: {} sec, ".format(
-                        format((train_run_cost)/print_step, '.5f'))
-                    profiler_string += "avg_samples: {}, ".format(
-                        format(total_examples / print_step, '.5f'))
-                    profiler_string += "ips: {} {}/sec ".format(
-                        format(total_examples / (train_run_cost), '.5f'), self.count_method)
-                    logger.info("Epoch: {}, Batch: {}, {} {}".format(epoch, batch_id,
-                                                                     metrics_string, profiler_string))
-                    train_run_cost = 0.0
-                    total_examples = 0
-            except fluid.core.EOFException:
-                self.reader.reset()
-                break
-
-    def heter_train_loop(self, epoch):
-        logger.info(
-            "Epoch: {}, Running Begin. Check running metrics at heter_log".format(epoch))
-        reader_type = self.config.get("static_benchmark.reader_type")
-        if reader_type == "QueueDataset":
-            self.exe.train_from_dataset(
-                program=paddle.static.default_main_program(),
-                dataset=self.reader,
-                debug=config.get("static_benchmark.dataset_debug"))
-        elif reader_type == "DataLoader":
-            batch_id = 0
-            train_run_cost = 0.0
-            total_examples = 0
-            self.reader.start()
-            while True:
-                try:
-                    train_start = time.time()
-                    # --------------------------------------------------- #
-                    self.exe.run(
-                        program=paddle.static.default_main_program())
-                    # --------------------------------------------------- #
-                    train_run_cost += time.time() - train_start
-                    total_examples += self.config.get(
-                        "static_benchmark.batch_size")
-                    batch_id += 1
-                    print_step = int(config.get(
-                        "static_benchmark.print_period"))
-                    if batch_id % print_step == 0:
-                        profiler_string = ""
-                        profiler_string += "avg_batch_cost: {} sec, ".format(
-                            format((train_run_cost)/print_step, '.5f'))
-                        profiler_string += "avg_samples: {}, ".format(
-                            format(total_examples / print_step, '.5f'))
-                        profiler_string += "ips: {} {}/sec ".format(
-                            format(total_examples / (train_run_cost), '.5f'), self.count_method)
-                        logger.info("Epoch: {}, Batch: {}, {}".format(epoch, batch_id,
-                                                                      profiler_string))
-                        train_run_cost = 0.0
-                        total_examples = 0
-                except fluid.core.EOFException:
-                    self.reader.reset()
-                    break
-
 
 if __name__ == "__main__":
-    paddle.enable_static()
     config = parse_args()
     os.environ["CPU_NUM"] = str(config.get("static_benchmark.thread_num"))
     benchmark_main = Main(config)

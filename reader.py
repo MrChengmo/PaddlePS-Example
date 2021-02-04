@@ -18,8 +18,8 @@ import warnings
 import logging
 import paddle
 import paddle.fluid as fluid
-import paddle.distributed.fleet.base.role_maker as role_maker
-import paddle.distributed.fleet as fleet
+import paddle.fluid.incubate.fleet.base.role_maker as role_maker
+from paddle.fluid.incubate.fleet.parameter_server.distribute_transpiler import fleet
 import utils
 
 logging.basicConfig(
@@ -59,7 +59,7 @@ def get_file_list(data_path, config):
     if config.get("static_benchmark.split_file_list"):
         logger.info("Split file list for worker {}".format(fleet.worker_index(
         )))
-        file_list = fleet.util.get_file_shard(file_list)
+        file_list = fleet.split_files(file_list)
     logger.info("File list: {}".format(file_list))
     return file_list
 

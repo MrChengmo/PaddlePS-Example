@@ -19,8 +19,6 @@ import warnings
 import logging
 import paddle
 import paddle.fluid as fluid
-import paddle.distributed.fleet.base.role_maker as role_maker
-import paddle.distributed.fleet as fleet
 import utils
 import time
 import reader
@@ -64,8 +62,8 @@ class Main(object):
         self.init_reader()
         use_cuda = int(config.get(
             "static_benchmark.use_cuda"))
-        place = paddle.CUDAPlace(0) if use_cuda else paddle.CPUPlace()
-        self.exe = paddle.static.Executor(place)
+        place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
+        self.exe = fluid.Executor(place)
 
         init_model_path = config.get("static_benchmark.save_model_path")
         for file in os.listdir(init_model_path):
@@ -137,12 +135,11 @@ class Main(object):
             tensor = param.get_tensor()
             if param:
                 tensor_array = np.zeros(tensor._get_dims()).astype("int64")
-                tensor.set(tensor_array, paddle.CPUPlace())
+                tensor.set(tensor_array, fluid.CPUPlace())
                 logger.info("AUC Reset To Zero: {}".format(name))
 
 
 if __name__ == "__main__":
-    paddle.enable_static()
     config = parse_args()
     save_model_path = config.get("static_benchmark.save_model_path")
     if save_model_path and os.path.exists(save_model_path):

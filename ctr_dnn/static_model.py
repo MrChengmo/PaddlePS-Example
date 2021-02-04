@@ -11,11 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import paddle.nn.functional as F
-import paddle.nn as nn
 import paddle
 import paddle.fluid as fluid
-import paddle.distributed.fleet as fleet
+from paddle.fluid.incubate.fleet.parameter_server.distribute_transpiler import fleet
 import math
 
 
@@ -63,34 +61,55 @@ class Model(object):
         return inputs
 
     def net(self, input):
-        "Dynamic network -> Static network"
-        dnn_model = DNNLayer(self.sparse_feature_dim,
-                             self.embedding_size, self.dense_feature_dim,
-                             len(input[1:-1]), self.fc_sizes)
+        def embedding_layer(input):
+            return fluid.layers.embedding(
+                input=input,
+                is_sparse=True,
+                size=[self.sparse_feature_dim,  self.embedding_size],
+                param_attr=fluid.ParamAttr(
+                    name="SparseFeatFactors",
+                    initializer=fluid.initializer.Uniform()),
+            )
 
-        raw_predict_2d = dnn_model(input[1:-1], input[0])
+        dense_inputs = input[0:1]
+        sparse_inputs = input[1:-1]
+        label = input[-1]
+        sparse_embed_seq = list(map(embedding_layer, sparse_inputs))
 
-        with fluid.device_guard("gpu"):
-            predict_2d = paddle.nn.functional.softmax(raw_predict_2d)
+        concated = fluid.layers.concat(
+            sparse_embed_seq + dense_inputs, axis=1)
 
-            self.predict = predict_2d
+        
+        fc_input = [concated]
+        fc_output = []
+        for index, layer_size in enumerate(self.fc_sizes):
+            fc_out = fluid.layers.fc(
+                input=fc_input[-1],
+                size=layer_size,
+                act="relu",
+                param_attr=fluid.ParamAttr(initializer=fluid.initializer.Normal(
+                    scale=1 / math.sqrt(fc_input[-1].shape[1]))), 
+                name = "fc_{}".format(index)
+            )
+            fc_output.append(fc_out)
+            fc_input.append(fc_out)
 
-            auc, batch_auc, _ = paddle.fluid.layers.auc(input=self.predict,
-                                                        label=input[-1],
-                                                        num_thresholds=2**12,
-                                                        slide_steps=20)
-
-            cost = paddle.nn.functional.cross_entropy(
-                input=raw_predict_2d, label=input[-1])
-            avg_cost = paddle.mean(x=cost)
-            self.cost = avg_cost
-            self.infer_target_var = auc
-
-            sync_mode = self.config.get("static_benchmark.sync_mode")
-            if sync_mode == "heter":
-                fluid.layers.Print(auc, message="AUC")
-
-        return {'cost': avg_cost, 'auc': auc}
+        pred = fluid.layers.fc(
+                input=fc_output[-1],
+                size=2,
+                act="softmax",
+                param_attr=fluid.ParamAttr(initializer=fluid.initializer.Normal(
+                    scale=1 / math.sqrt(fc_output[-1].shape[1]))),
+            )
+        cost = fluid.layers.cross_entropy(input=pred, label=label)
+        avg_cost = fluid.layers.reduce_mean(cost)
+        auc_var, _, _ = fluid.layers.auc(input=pred,
+                                            label=label,
+                                            num_thresholds=2**12,
+                                            slide_steps=20)
+        self.infer_target_var = auc_var
+        self.cost = avg_cost
+        return {'cost': avg_cost, 'auc': auc_var}
 
     def minimize(self, strategy=None):
         optimizer = fluid.optimizer.Adam(
@@ -98,61 +117,3 @@ class Model(object):
         if strategy != None:
             optimizer = fleet.distributed_optimizer(optimizer, strategy)
         optimizer.minimize(self.cost)
-
-
-"""
-This file come from PaddleRec/models/rank/dnn/dnn_net.py
-"""
-
-
-class DNNLayer(nn.Layer):
-    def __init__(self, sparse_feature_number, sparse_feature_dim,
-                 dense_feature_dim, num_field, layer_sizes):
-        super(DNNLayer, self).__init__()
-        self.sparse_feature_number = sparse_feature_number
-        self.sparse_feature_dim = sparse_feature_dim
-        self.dense_feature_dim = dense_feature_dim
-        self.num_field = num_field
-        self.layer_sizes = layer_sizes
-
-        self.embedding = paddle.nn.Embedding(
-            self.sparse_feature_number,
-            self.sparse_feature_dim,
-            sparse=True,
-            weight_attr=paddle.ParamAttr(
-                name="SparseFeatFactors",
-                initializer=paddle.nn.initializer.Uniform()))
-
-        sizes = [sparse_feature_dim * num_field + dense_feature_dim
-                 ] + self.layer_sizes + [2]
-        acts = ["relu" for _ in range(len(self.layer_sizes))] + [None]
-        self._mlp_layers = []
-        for i in range(len(layer_sizes) + 1):
-            linear = paddle.nn.Linear(
-                in_features=sizes[i],
-                out_features=sizes[i + 1],
-                weight_attr=paddle.ParamAttr(
-                    initializer=paddle.nn.initializer.Normal(
-                        std=1.0 / math.sqrt(sizes[i]))))
-            self.add_sublayer('linear_%d' % i, linear)
-            self._mlp_layers.append(linear)
-            if acts[i] == 'relu':
-                act = paddle.nn.ReLU()
-                self.add_sublayer('act_%d' % i, act)
-                self._mlp_layers.append(act)
-
-    def forward(self, sparse_inputs, dense_inputs):
-
-        sparse_embs = []
-        for s_input in sparse_inputs:
-            emb = self.embedding(s_input)
-            emb = paddle.reshape(emb, shape=[-1, self.sparse_feature_dim])
-            sparse_embs.append(emb)
-
-        y_dnn = paddle.concat(x=sparse_embs + [dense_inputs], axis=1)
-
-        with fluid.device_guard("gpu"):
-            for n_layer in self._mlp_layers:
-                y_dnn = n_layer(y_dnn)
-
-        return y_dnn

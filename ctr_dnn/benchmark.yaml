@@ -23,8 +23,8 @@ hyper_parameters:
   fc_sizes: [400, 400, 400]
 
 static_benchmark:
-  epochs: 15
-  print_period: 100
+  epochs: 1
+  print_period: 1
   batch_size: 1000
 
   geo_step: 400

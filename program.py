@@ -18,8 +18,9 @@ import warnings
 import logging
 import paddle
 import paddle.fluid as fluid
-import paddle.distributed.fleet.base.role_maker as role_maker
-import paddle.distributed.fleet as fleet
+import paddle.fluid.incubate.fleet.base.role_maker as role_maker
+from paddle.fluid.incubate.fleet.parameter_server.distribute_transpiler.distributed_strategy import StrategyFactory
+from paddle.fluid.incubate.fleet.parameter_server.distribute_transpiler import fleet
 import utils
 
 logging.basicConfig(
@@ -37,20 +38,12 @@ def get_strategy(config):
     assert sync_mode in [
         "async", "sync", "geo", "heter"]
     if sync_mode == "sync":
-        strategy = paddle.distributed.fleet.DistributedStrategy()
-        strategy.a_sync = False
+        strategy = StrategyFactory.create_sync_strategy()
     elif sync_mode == "async":
-        strategy = paddle.distributed.fleet.DistributedStrategy()
-        strategy.a_sync = True
+        strategy = StrategyFactory.create_async_strategy()
     elif sync_mode == "geo":
-        strategy = paddle.distributed.fleet.DistributedStrategy()
-        strategy.a_sync = True
-        strategy.a_sync_configs = {
-            "k_steps": config.get("static_benchmark.geo_step")}
-    elif sync_mode == "heter":
-        strategy = paddle.distributed.fleet.DistributedStrategy()
-        strategy.a_sync = True
-        strategy.a_sync_configs = {"heter_worker_device_guard": "gpu"}
+        geo_step = config.get("static_benchmark.geo_step")
+        strategy = StrategyFactory.create_geo_strategy(geo_step)
     return strategy
 
 
