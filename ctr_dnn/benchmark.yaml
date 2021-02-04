@@ -23,8 +23,8 @@ hyper_parameters:
   fc_sizes: [400, 400, 400]
 
 static_benchmark:
-  epochs: 1
-  print_period: 1
+  epochs: 10
+  print_period: 100
   batch_size: 1000
 
   geo_step: 400
@@ -34,7 +34,7 @@ static_benchmark:
   
   reader_type: "QueueDataset"  # DataLoader / QueueDataset
   dataset_debug: False
-  split_file_list: False
+  split_file_list: True
   train_data_path: "{workspace}/train_data"
   test_data_path: "{workspace}/test_data"
   save_model_path: "{workspace}/model"
