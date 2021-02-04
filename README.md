@@ -27,6 +27,12 @@
 
     在ctr_dnn目录下
 
+    首先下载数据
+
+    ```
+    sh benchamrk_data.sh
+    ```
+
     模拟分布式运行ctr
 
     ```shell
@@ -55,4 +61,4 @@ workspace: ctr_dnn
 
 ## 执行分布式训练
 
-在每台机器上设置环境变量后，执行 `python -u train.py`
+在每台机器上设置环境变量后，执行 `python -u ../train.py -c benchmark.sh`
